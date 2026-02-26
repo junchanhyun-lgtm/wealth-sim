@@ -1,3 +1,4 @@
+%%writefile app.py
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -40,7 +41,7 @@ class FinancialSimulator:
             decay = 1 - (0.12 * np.log10(current_asset_won / threshold))
             return max(base_return * decay, 0.015)
 
-    def run_monte_carlo(self, n_simulations=200):
+    def run_monte_carlo(self, n_simulations=5000):
         current_age = self.params['current_age']
         death_age = self.params['death_age']
         
@@ -63,6 +64,7 @@ class FinancialSimulator:
         years = list(range(current_age, death_age + 1))
         simulation_years = len(years)
         
+        # 결과 저장 배열
         sim_assets_pv = np.zeros((n_simulations, simulation_years))
         sim_spending_pv = np.zeros((n_simulations, simulation_years))
         
@@ -76,7 +78,6 @@ class FinancialSimulator:
             is_retired = False
             
             for t, age in enumerate(years):
-                # 물가 상승 배수
                 discount_factor = (1 + inflation) ** t
                 
                 # A. 은퇴 체크 및 수입 계산
@@ -87,18 +88,15 @@ class FinancialSimulator:
                     elif target_asset_won > 0 and nominal_asset >= target_asset_won:
                         is_retired = True
                     else:
-                        # [핵심 로직] 수입 물가상승 반영 여부
                         if apply_income_inflation:
                             current_nominal_income = base_monthly_income * discount_factor
                         else:
-                            current_nominal_income = base_monthly_income # 명목 금액 고정
+                            current_nominal_income = base_monthly_income
 
                 # B. 지출 계산 (지출은 무조건 물가상승 반영)
-                # 1) 기본 생활비
                 lifecycle_factor = self.get_lifecycle_multiplier(age)
                 nominal_basic = (base_monthly_expense * 12) * discount_factor * lifecycle_factor
                 
-                # 2) 추가 기간 수입/지출
                 net_recurring_cashflow = 0 
                 if 'recurring_events' in self.params:
                     for event in self.params['recurring_events']:
@@ -106,7 +104,6 @@ class FinancialSimulator:
                         if event['start_age'] <= age < end_age:
                             net_recurring_cashflow += (event['monthly_amount'] * 10000) * 12 * discount_factor
                 
-                # 순 필요 자금
                 total_nominal_need = nominal_basic - net_recurring_cashflow
                 nominal_actual_spending = total_nominal_need
 
@@ -154,10 +151,10 @@ class FinancialSimulator:
 # 3. UI 구성
 # -----------------------------------------------------------
 def main():
-    st.set_page_config(layout="wide", page_title="Financial Asset Sim V11")
+    st.set_page_config(layout="wide", page_title="Financial Asset Sim V14")
     
-    st.title("💰 금융자산 시뮬레이터 V11")
-    st.info("💡 **현재가치 기준:** 모든 결과 그래프는 물가상승분을 제외한 **'오늘의 구매력'**으로 환산되어 표시됩니다.")
+    st.title("💰 고정밀 금융자산 시뮬레이터 V14")
+    st.info("💡 **현재가치 기준:** 모든 결과 그래프는 물가상승분을 제외한 **'오늘의 구매력(현재가치)'**으로 환산되어 표시됩니다.")
     st.markdown("---")
 
     # [입력 1] 기본 정보
@@ -173,10 +170,9 @@ def main():
         st.subheader("2. 금융자산 현황 (단위: 만 원)")
         current_asset = st.number_input("현재 금융자산", 0, value=20000, step=100, help="부동산 제외, 운용 가능한 자산 (예: 2억 = 20,000)")
         
-        # 수입 섹션 + 물가상승 반영 옵션
         col_inc1, col_inc2 = st.columns([2, 1])
         monthly_income = col_inc1.number_input("월 수입 (세후)", 0, value=500, step=10)
-        apply_income_inflation = col_inc2.checkbox("물가상승 반영", value=True, help="체크 시: 내 월급도 물가만큼 오른다 / 해제 시: 월급 금액 고정")
+        apply_income_inflation = col_inc2.checkbox("물가상승 반영", value=True, help="체크: 실질소득 유지 / 해제: 실질소득 감소")
         
         monthly_expense = st.number_input("월 기본 생활비", 0, value=300, step=10, help="숨만 쉬어도 나가는 기본 생활비")
 
@@ -242,11 +238,12 @@ def main():
 
     # [실행]
     st.markdown("---")
-    if st.button("🚀 시뮬레이션 실행", type="primary", use_container_width=True):
+    if st.button("🚀 5,000회 시뮬레이션 시작", type="primary", use_container_width=True):
         st.divider()
-        st.header(f"📊 {personality} 시뮬레이션 결과 (현재가치 기준)")
+        n_sims = 5000
         
         params = {
+            'n_simulations': n_sims,
             'current_age': current_age, 'death_age': death_age,
             'current_asset': current_asset, 'monthly_income': monthly_income,
             'apply_income_inflation': apply_income_inflation,
@@ -258,34 +255,62 @@ def main():
             'recurring_events': st.session_state.recurring_events
         }
         
-        simulator = FinancialSimulator(params)
-        years, sim_assets, sim_spending = simulator.run_monte_carlo(n_simulations=200)
+        with st.spinner(f"5,000번의 시뮬레이션을 정밀 계산 중입니다..."):
+            simulator = FinancialSimulator(params)
+            years, sim_assets, sim_spending = simulator.run_monte_carlo(n_simulations=n_sims)
         
-        median_assets = np.median(sim_assets, axis=0)
-        median_assets_eok = median_assets / 100000000
-        ruin_prob = (np.sum(sim_assets[:, -1] <= 0) / 200) * 100
+        # 통계 계산
+        median_assets = np.median(sim_assets, axis=0) / 100000000
+        top_10_assets = np.percentile(sim_assets, 90, axis=0) / 100000000
+        bottom_10_assets = np.percentile(sim_assets, 10, axis=0) / 100000000
+        top_25_assets = np.percentile(sim_assets, 75, axis=0) / 100000000
+        bottom_25_assets = np.percentile(sim_assets, 25, axis=0) / 100000000
+        
+        ruin_prob = (np.sum(sim_assets[:, -1] <= 0) / n_sims) * 100
         
         g_col, d_col = st.columns([2.5, 1])
         
         with g_col:
-            k1, k2 = st.columns(2)
-            k1.metric("파산 위험 확률", f"{ruin_prob:.1f}%", delta_color="inverse")
-            k2.metric("사망 시 금융자산", f"{median_assets_eok[-1]:.2f}억 원")
+            st.header(f"📊 {personality} 결과 (현재가치 기준)")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("파산 확률", f"{ruin_prob:.1f}%", help="5,000번 중 0원이 된 비율")
+            k2.metric("중위값 자산 (50%)", f"{median_assets[-1]:.2f}억 원")
+            k3.metric("최악의 경우 (하위 10%)", f"{bottom_10_assets[-1]:.2f}억 원", delta_color="inverse")
             
+            # 자산 그래프
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=years, y=median_assets_eok, line=dict(color='#2E86C1', width=3), name='예상 자산'))
+            fig.add_trace(go.Scatter(
+                x=years + years[::-1],
+                y=np.concatenate([top_10_assets, bottom_10_assets[::-1]]),
+                fill='toself', fillcolor='rgba(0,176,246,0.1)',
+                line=dict(color='rgba(255,255,255,0)'),
+                name='상위 10% ~ 하위 10%'
+            ))
+            fig.add_trace(go.Scatter(
+                x=years + years[::-1],
+                y=np.concatenate([top_25_assets, bottom_25_assets[::-1]]),
+                fill='toself', fillcolor='rgba(0,176,246,0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                name='상위 25% ~ 하위 25%'
+            ))
+            fig.add_trace(go.Scatter(
+                x=years, y=median_assets,
+                line=dict(color='rgb(0,176,246)', width=3),
+                name='중위값 (예상)'
+            ))
             fig.add_hline(y=0, line_dash="dash", line_color="red")
-            fig.update_layout(title="<b>연도별 금융자산 추이 (단위: 억 원)</b>", xaxis_title="나이", yaxis_title="억 원", height=400, template="plotly_white", hovermode="x unified")
+            fig.update_layout(title="<b>연도별 자산 확률 분포 (단위: 억 원, 현재가치 기준)</b>", xaxis_title="나이", yaxis_title="억 원", height=450, template="plotly_white", hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
             
+            # 생활비 그래프
             median_spending_man = np.median(sim_spending, axis=0) / 10000
-            fig2 = px.line(x=years, y=median_spending_man, markers=True, title="<b>월 순필요 자금 (기본생활비 + 추가지출 - 연금수입)</b>")
+            fig2 = px.line(x=years, y=median_spending_man, markers=True, title="<b>월 순필요 자금 (중위값/현재가치 기준)</b>")
             fig2.update_traces(line_color='#E74C3C')
             fig2.update_layout(yaxis=dict(tickformat=","), yaxis_title="만 원", xaxis_title="나이", hovermode="x unified")
             st.plotly_chart(fig2, use_container_width=True)
 
         with d_col:
-            st.subheader("📝 적용된 4대 로직")
+            st.subheader("📝 적용된 로직")
             st.success("""
             **1. 수익률 체감 (Safety First)**
             * 금융자산 **10억 원** 초과 시 연 수익률이 점진적으로 감소합니다.
@@ -295,14 +320,24 @@ def main():
             
             **3. 노후 의료비 (Medical)**
             * **75세부터 월 -50만 원(지출)** 자동 적용
+            * *(기간 수입/지출 탭에서 금액 및 시기 수정 가능)*
             
             **4. 국민연금 (Pension)**
             * **70세부터 월 +100만 원(수입)** 자동 적용
+            * *(기간 수입/지출 탭에서 금액 및 시기 수정 가능)*
             """)
             
-            st.subheader("💡 그래프 해석 전문가 팁")
-            st.info("""
-            "**그래프 해석 팁:**\n'월 순필요 자금' 그래프가 뚝 떨어진다면, 연금을 받기 시작해서 내 돈을 덜 써도 된다는 뜻입니다.")
+            st.subheader("🎲 몬테카를로 분석")
+            st.info(f"""
+            **5,000회 시뮬레이션 완료**
+            
+            **📉 파산 확률: {ruin_prob:.1f}%**
+            * {n_sims}개의 가상 시나리오 중 {int(ruin_prob/100 * n_sims)}번은 자산이 소진되었습니다.
+            
+            **📊 자산 범위 ({death_age}세 기준)**
+            * **상위 10%:** {top_10_assets[-1]:.2f}억 원
+            * **중위 50%:** {median_assets[-1]:.2f}억 원
+            * **하위 10%:** {bottom_10_assets[-1]:.2f}억 원
             """)
 
 if __name__ == '__main__':
