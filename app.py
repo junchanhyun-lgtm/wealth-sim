@@ -2,9 +2,20 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import json
 
 # -----------------------------------------------------------
-# 1. 헬퍼 함수
+# [추가] JSON 저장을 위한 Numpy 데이터 인코더
+# -----------------------------------------------------------
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating): return float(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
+# -----------------------------------------------------------
+# 1. 헬퍼 함수 (기존과 동일)
 # -----------------------------------------------------------
 def format_won(value_in_manwon):
     val = int(value_in_manwon)
@@ -17,7 +28,7 @@ def format_won(value_in_manwon):
         return f"{val}만 원"
 
 # -----------------------------------------------------------
-# 2. 시뮬레이션 엔진 (Monte Carlo Engine)
+# 2. 시뮬레이션 엔진 (Monte Carlo Engine) (기존 로직 100% 유지)
 # -----------------------------------------------------------
 class FinancialSimulator:
     def __init__(self, params):
@@ -245,8 +256,31 @@ class FinancialSimulator:
 
         return years, main_pv, main_nom, safe_extra, base_ruin, pd.DataFrame(results), target_ruin_prob, earliest_fire_age
 
+    # -----------------------------------------------------------
+    # [추가] 변수 민감도 분석 (토네이도 차트용 데이터 생성)
+    # -----------------------------------------------------------
+    def run_sensitivity(self, base_ruin, sims=2000):
+        scenarios = [
+            ("수익률 -1%p 하락", 'expected_return', -1.0),
+            ("수익률 +1%p 상승", 'expected_return', 1.0),
+            ("물가상승률 +1%p 폭등", 'inflation', 1.0),
+            ("기본생활비 +10% 증가", 'monthly_expense', self.params['monthly_expense'] * 0.1),
+        ]
+
+        sens_results = []
+        for label, key, delta in scenarios:
+            temp_params = self.params.copy()
+            temp_params[key] += delta
+            temp_sim = FinancialSimulator(temp_params)
+            _, pv, _ = temp_sim.run_monte_carlo(n_simulations=sims, override_extra_margin=0)
+            ruin = (np.sum(pv[:, -1] <= 0) / sims) * 100
+            impact = ruin - base_ruin
+            sens_results.append({"시나리오": label, "파산확률": ruin, "충격(%)": impact})
+
+        return pd.DataFrame(sens_results)
+
 # -----------------------------------------------------------
-# 3. Streamlit UI (V44.3 세팅 완벽 복구 에디션)
+# 3. Streamlit UI (V44.3 세팅 완벽 복구 에디션 + Key 추가)
 # -----------------------------------------------------------
 def main():
     st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V44.3)")
@@ -263,45 +297,75 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
+    # -----------------------------------------------------------
+    # [추가] 좌측 사이드바: JSON 세이브 & 로드 기능
+    # -----------------------------------------------------------
+    with st.sidebar:
+        st.header("💾 시나리오 저장 / 불러오기")
+        st.info("현재 입력된 모든 값들을 내 PC에 백업하거나 불러옵니다.")
+
+        # 현재 상태를 JSON으로 묶기
+        export_dict = {}
+        for k in st.session_state.keys():
+            if k in ['sim_results']: continue
+            val = st.session_state[k]
+            if isinstance(val, pd.DataFrame):
+                export_dict[k] = val.to_dict(orient="records")
+            else:
+                export_dict[k] = val
+
+        json_data = json.dumps(export_dict, cls=NumpyEncoder, ensure_ascii=False, indent=2)
+        st.download_button("📥 설정 파일 다운로드 (JSON)", data=json_data, file_name="my_quant_scenario.json", mime="application/json", use_container_width=True)
+
+        uploaded_file = st.file_uploader("📤 설정 파일 불러오기", type="json")
+        if uploaded_file is not None:
+            if st.button("적용 및 화면 새로고침", use_container_width=True):
+                data = json.loads(uploaded_file.getvalue().decode('utf-8'))
+                for k, v in data.items():
+                    if k in ['port_df', 'lump_df', 'recur_df']:
+                        st.session_state[k] = pd.DataFrame(v)
+                    else:
+                        st.session_state[k] = v
+                st.rerun()
+
     st.title("💰 내 전용 퀀트 금융자산 시뮬레이터 (V44.3)")
     st.info("💡 나만의 라이프스타일과 재무 상태에 맞춰 기본값이 완벽하게 세팅된 커스텀 마스터피스입니다.")
     st.markdown("---")
 
     c1, c2, c3 = st.columns(3)
 
+    # st.session_state를 연동하기 위해 모든 입력란에 key=... 옵션만 살짝 추가했습니다.
     with c1:
         with st.container(border=True):
             st.subheader("👤 1. 기본 정보")
-            current_age = st.number_input("현재 나이", 20, 80, 40)
-            death_age = st.number_input("목표 수명", 80, 120, 90)
+            current_age = st.number_input("현재 나이", 20, 80, 40, key='in_age')
+            death_age = st.number_input("목표 수명", 80, 120, 90, key='in_death')
 
     with c2:
         with st.container(border=True):
             st.subheader("💵 2. 기본 수입 및 지출")
             col_inc1, col_inc2 = st.columns([2, 1])
-            monthly_income = col_inc1.number_input("월 수입 (세후/만원)", 0, value=500, step=10)
-            # 일반 토글은 False 유지
-            apply_income_inflation = col_inc2.checkbox("수입 물가연동", value=False)
-            monthly_expense = st.number_input("월 필수 기본 지출 (만원)", 0, value=600, step=10)
+            monthly_income = col_inc1.number_input("월 수입 (세후/만원)", 0, value=500, step=10, key='in_income')
+            apply_income_inflation = col_inc2.checkbox("수입 물가연동", value=False, key='in_inc_inf')
+            monthly_expense = st.number_input("월 필수 기본 지출 (만원)", 0, value=600, step=10, key='in_expense')
 
     with c3:
         with st.container(border=True):
             st.subheader("📈 3. 자산 및 거시 지표")
-            # 일반 토글은 False 유지
-            use_advanced_portfolio = st.checkbox("✅ 다중 계좌 포트폴리오 (고급)", value=False, help="체크 시 하단 표에서 상세 분배 가능")
+            use_advanced_portfolio = st.checkbox("✅ 다중 계좌 포트폴리오 (고급)", value=False, help="체크 시 하단 표에서 상세 분배 가능", key='in_adv_port')
 
             if not use_advanced_portfolio:
-                current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100)
+                current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100, key='in_asset')
                 col_ret1, col_ret2 = st.columns(2)
-                expected_return = col_ret1.number_input("연 세후 수익률(%)", 0.0, 30.0, 15.0, step=0.5)
-                volatility = col_ret2.number_input("변동성(%)", 0.0, 50.0, 15.0, step=1.0)
+                expected_return = col_ret1.number_input("연 세후 수익률(%)", 0.0, 30.0, 15.0, step=0.5, key='in_ret')
+                volatility = col_ret2.number_input("변동성(%)", 0.0, 50.0, 15.0, step=1.0, key='in_vol')
             else:
                 st.info("👇 하단의 [다중 계좌 설정] 표에서 자산을 분배해주세요.")
 
             st.markdown("---")
             col_ret3, col_ret4 = st.columns(2)
-            inflation = col_ret3.number_input("평시 물가 상승률(%)", 0.0, 10.0, 2.5, step=0.1)
-            tax_fee_rate = col_ret4.number_input("세금/수수료(연%)", 0.0, 5.0, 0.5, step=0.1)
+            inflation = col_ret3.number_input("평시 물가 상승률(%)", 0.0, 10.0, 2.5, step=0.1, key='in_inf')
+            tax_fee_rate = col_ret4.number_input("세금/수수료(연%)", 0.0, 5.0, 0.5, step=0.1, key='in_tax')
 
     if use_advanced_portfolio:
         with st.container(border=True):
@@ -313,6 +377,7 @@ def main():
                 ])
             edited_port_df = st.data_editor(st.session_state.port_df, num_rows="dynamic", use_container_width=True)
             clean_port_df = edited_port_df.dropna(subset=['금액(만원)', '수익률(%)', '변동성(%)'])
+            st.session_state.port_df = clean_port_df # JSON 저장 연동
 
             total_asset_calc = clean_port_df['금액(만원)'].sum()
             if total_asset_calc > 0:
@@ -331,20 +396,19 @@ def main():
     with st.expander("🔥 **블랙 스완 & 다이 위드 제로 (고급 설정)**", expanded=True):
         with st.container(border=True):
             st.markdown("##### 🏖️ 라이프스타일 퀀트 최적화")
-            # 고급 설정 토글 6개 모두 True로 변경
-            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (투트랙 욜로 + 15% 리스크 허용)", value=True)
+            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (투트랙 욜로 + 15% 리스크 허용)", value=True, key='in_dwz')
 
         with st.container(border=True):
             st.markdown("##### 🚨 블랙 스완 방어선 (치명적 위기 테스트)")
             c_risk1, c_risk2 = st.columns(2)
-            use_fat_tail = c_risk1.checkbox("📉 팻 테일(Fat Tail) 확률 적용", value=True)
-            use_sorr_test = c_risk2.checkbox("😱 은퇴 직후 2년 폭락 (SORR 셔플링)", value=True)
+            use_fat_tail = c_risk1.checkbox("📉 팻 테일(Fat Tail) 확률 적용", value=True, key='in_fat')
+            use_sorr_test = c_risk2.checkbox("😱 은퇴 직후 2년 폭락 (SORR 셔플링)", value=True, key='in_sorr')
 
             c_risk3, c_risk4 = st.columns(2)
-            use_flex_spending = c_risk3.checkbox("🧠 점진적 생존 본능 (긴축 규칙)", value=True)
-            use_glide_path = c_risk4.checkbox("📉 자산 노화 (TDF Glide Path)", value=True)
+            use_flex_spending = c_risk3.checkbox("🧠 점진적 생존 본능 (긴축 규칙)", value=True, key='in_flex')
+            use_glide_path = c_risk4.checkbox("📉 자산 노화 (TDF Glide Path)", value=True, key='in_glide')
 
-            use_inflation_shock = st.checkbox("🔥 스태그플레이션 발작 충격 (구매력 파괴)", value=True)
+            use_inflation_shock = st.checkbox("🔥 스태그플레이션 발작 충격 (구매력 파괴)", value=True, key='in_shock')
 
     st.markdown("---")
     col_left, col_right = st.columns([1, 1.4])
@@ -352,9 +416,9 @@ def main():
     with col_left:
         with st.container(border=True):
             st.subheader("🎯 4. 은퇴 목표")
-            retire_mode = st.radio("은퇴 기준", ["나이 기준", "자산 기준"], horizontal=True)
-            retire_age = st.number_input("은퇴 나이", current_age, 90, 60) if retire_mode == "나이 기준" else 100
-            retire_by_asset = st.number_input("목표 자산 (만원)", 0, value=150000) if retire_mode == "자산 기준" else 0
+            retire_mode = st.radio("은퇴 기준", ["나이 기준", "자산 기준"], horizontal=True, key='in_ret_mode')
+            retire_age = st.number_input("은퇴 나이", current_age, 90, 60, key='in_ret_age') if retire_mode == "나이 기준" else 100
+            retire_by_asset = st.number_input("목표 자산 (만원)", 0, value=150000, key='in_ret_asset') if retire_mode == "자산 기준" else 0
 
     with col_right:
         with st.container(border=True):
@@ -372,11 +436,11 @@ def main():
                     column_config={"유형": st.column_config.SelectboxColumn("유형", options=["수입", "지출"], required=True),
                                    "금액(만원)": st.column_config.NumberColumn("금액(만원)", min_value=0)})
                 clean_lump_df = edited_lump_df.dropna(subset=['나이', '유형', '금액(만원)'])
+                st.session_state.lump_df = clean_lump_df # JSON 연동
 
             with tab2:
                 st.info("💡 **[노후 방어율]** 죽을 때까지 안정적으로 나오는 '수입' 항목에는 **'확정연금'** 칸에 체크(☑️)해 주세요.")
                 if 'recur_df' not in st.session_state:
-                    # 🚀 기존 데이터 유지 + 새로운 데이터(초과근무, 국민연금, 주택연금) 완벽하게 추가
                     st.session_state.recur_df = pd.DataFrame([
                         {"시작나이": 47, "기간(년)": 5, "유형": "지출", "내용": "자동차할부", "월금액(만원)": 250, "확정연금": False},
                         {"시작나이": 40, "기간(년)": 20, "유형": "지출", "내용": "부모님용돈", "월금액(만원)": 100, "확정연금": False},
@@ -391,10 +455,14 @@ def main():
                         "확정연금": st.column_config.CheckboxColumn("확정연금(방어율용)")
                     })
                 clean_recur_df = edited_recur_df.dropna(subset=['시작나이', '기간(년)', '유형', '월금액(만원)'])
+                st.session_state.recur_df = clean_recur_df # JSON 연동
 
-    if st.button("🚀 5,000회 연산 및 정밀 스트레스 테스트 시작", type="primary", use_container_width=True):
+    # -----------------------------------------------------------
+    # [수정] 버튼 텍스트와 횟수만 10,000회로 변경 (나머지 로직 동일)
+    # -----------------------------------------------------------
+    if st.button("🚀 10,000회 연산 및 정밀 스트레스 테스트 시작", type="primary", use_container_width=True):
         st.divider()
-        n_sims = 5000
+        n_sims = 10000
         params = {
             'current_age': current_age, 'death_age': death_age, 'current_asset': current_asset,
             'monthly_income': monthly_income, 'apply_income_inflation': apply_income_inflation,
@@ -408,9 +476,12 @@ def main():
             'dwz_mode': dwz_mode
         }
 
-        with st.spinner("복잡계 퀀트 엔진 및 V44.3 MDD 방어력 계산 중..."):
+        with st.spinner("복잡계 퀀트 엔진 및 V44.3 MDD 방어력 계산 중 (1만 회 병렬처리)..."):
             simulator = FinancialSimulator(params)
             years, main_pv, main_nom, safe_extra, base_ruin, stress_df, t_ruin, earliest_fire = simulator.run_hybrid_analysis(main_sims=n_sims, search_sims=1000)
+
+            # [추가] 시뮬레이션 직후 민감도 분석 1회 더 실행
+            sens_df = simulator.run_sensitivity(base_ruin, sims=2000)
 
             total_pension = 0
             if '확정연금' in clean_recur_df.columns:
@@ -452,6 +523,7 @@ def main():
             st.session_state['sim_results'] = {
                 'years': years, 'pv': main_pv, 'nom': main_nom, 'n_sims': n_sims,
                 'safe_extra': safe_extra, 'base_ruin': base_ruin, 'stress_df': stress_df,
+                'sens_df': sens_df, # [추가] 민감도 분석 데이터 연동
                 'dwz_mode': dwz_mode, 't_ruin': t_ruin, 'defense_rate': defense_rate,
                 'depletion_age': depletion_age, 'lump_df': clean_lump_df,
                 'earliest_fire': earliest_fire, 'max_dd': max_dd * 100, 'recovery_years': recovery_years
@@ -549,6 +621,26 @@ def main():
 
             with st.container(border=True):
                 st.plotly_chart(fig, use_container_width=True)
+
+            # -----------------------------------------------------------
+            # [추가] 토네이도 차트 (메인 차트 바로 아래에 자연스럽게 삽입)
+            # -----------------------------------------------------------
+            st.markdown("##### 🌪️ 변수 민감도 분석 (무엇이 내 은퇴를 망치는가?)")
+            sens_df = res['sens_df'].sort_values(by="충격(%)", key=abs, ascending=True)
+            t_colors = ['#E74C3C' if val > 0 else '#27AE60' for val in sens_df['충격(%)']]
+            fig_torn = go.Figure(go.Bar(
+                x=sens_df['충격(%)'], y=sens_df['시나리오'], orientation='h', marker_color=t_colors,
+                text=[f"+{v:.1f}%p" if v > 0 else f"{v:.1f}%p" for v in sens_df['충격(%)']], textposition='auto'
+            ))
+            fig_torn.update_layout(
+                title="<b>해당 사건 발생 시 '내 파산 확률'의 증감 폭</b>",
+                xaxis_title="파산 확률 변동 폭 (%p)", height=250,
+                plot_bgcolor='rgba(252, 252, 252, 1)', paper_bgcolor='rgba(255, 255, 255, 1)',
+                margin=dict(l=20, r=20, t=40, b=20), xaxis=dict(fixedrange=True, showgrid=False), yaxis=dict(fixedrange=True, showgrid=True, gridcolor='#eaeaea')
+            )
+            fig_torn.add_vline(x=0, line_width=2, line_color="#333333")
+            with st.container(border=True):
+                st.plotly_chart(fig_torn, use_container_width=True)
 
         with d_col:
             with st.container(border=True):
