@@ -71,7 +71,7 @@ class FinancialSimulator:
 
         sim_assets_pv = np.zeros((n_simulations, simulation_years))
         sim_assets_nom = np.zeros((n_simulations, simulation_years))
-        sim_returns = np.zeros((n_simulations, simulation_years)) 
+        sim_returns = np.zeros((n_simulations, simulation_years))
 
         inflation_matrix = np.full((n_simulations, simulation_years), inflation)
         if use_inflation_shock:
@@ -137,7 +137,7 @@ class FinancialSimulator:
                 final_returns.append(current_ret)
 
             final_returns = np.array(final_returns)
-            sim_returns[i, :] = final_returns 
+            sim_returns[i, :] = final_returns
 
             path_assets_pv = []
             path_assets_nom = []
@@ -420,7 +420,7 @@ def main():
 
         with st.spinner("복잡계 퀀트 엔진 연산 수행 중..."):
             simulator = FinancialSimulator(params)
-            
+
             years, main_pv, main_nom, main_returns, safe_extra, base_ruin, stress_df, t_ruin, earliest_fire = simulator.run_hybrid_analysis(main_sims=n_sims, search_sims=1000)
             sens_df = simulator.run_sensitivity(base_ruin, sims=2000)
 
@@ -445,7 +445,7 @@ def main():
 
             st.session_state['sim_results'] = {
                 'years': years, 'pv': main_pv, 'nom': main_nom, 'returns': main_returns,
-                'n_sims': n_sims, 'safe_extra': safe_extra, 'base_ruin': base_ruin, 
+                'n_sims': n_sims, 'safe_extra': safe_extra, 'base_ruin': base_ruin,
                 'stress_df': stress_df, 'sens_df': sens_df,
                 'dwz_mode': dwz_mode, 't_ruin': t_ruin, 'defense_rate': defense_rate,
                 'lump_df': clean_lump_df, 'earliest_fire': earliest_fire
@@ -453,7 +453,7 @@ def main():
 
     if 'sim_results' in st.session_state:
         res = st.session_state['sim_results']
-        
+
         years, sim_assets_pv, sim_assets_nom, sim_returns = res['years'], res['pv'], res['nom'], res['returns']
         safe_extra, base_ruin, stress_df = res['safe_extra'], res['base_ruin'], res['stress_df']
         is_dwz, target_ruin = res['dwz_mode'], res['t_ruin']
@@ -487,7 +487,7 @@ def main():
             c_m1, c_m2, c_m3 = st.columns(3)
             cols = [c_m1, c_m2, c_m3]
             comp_data = {"나이": years}
-            
+
             target_age_idx = years.index(60) if 60 in years else -1
 
             for i, (label, data) in enumerate(paths.items()):
@@ -495,16 +495,16 @@ def main():
                 pv_array = data["pv"]
                 cagr = (np.prod(1 + ret_array) ** (1 / len(years)) - 1) * 100
                 age60_pv_eok = pv_array[target_age_idx] / 100000000 if target_age_idx != -1 else 0
-                
+
                 cols[i].metric(label, f"60세 자산 {age60_pv_eok:.1f}억 원", f"연평균(CAGR): {cagr:.2f}%", delta_color="off")
-                
+
                 short_label = label.split(" ")[0] + " " + label.split(" ")[1]
                 comp_data[f"[{short_label}] 수익률(%)"] = np.round(ret_array * 100, 2)
                 comp_data[f"[{short_label}] 자산(억)"] = np.round(pv_array / 100000000, 2)
 
             st.markdown("---")
             comp_df = pd.DataFrame(comp_data).set_index("나이")
-            
+
             c_chart1, c_chart2 = st.columns(2)
             with c_chart1:
                 st.markdown("###### 📈 연도별 적용 수익률 추이 비교")
@@ -537,7 +537,7 @@ def main():
             median_pv = np.median(sim_assets_pv, axis=0) / 100000000
             top_10_pv = np.percentile(sim_assets_pv, 90, axis=0) / 100000000
             bottom_10_pv = np.percentile(sim_assets_pv, 10, axis=0) / 100000000
-            
+
             target_display_age = retire_age if retire_mode == "나이 기준" else 60
             if target_display_age not in years: target_display_age = death_age
             idx_target = years.index(target_display_age)
