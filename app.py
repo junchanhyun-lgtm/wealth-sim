@@ -17,7 +17,7 @@ def format_won(value_in_manwon):
         return f"{val}만 원"
 
 # -----------------------------------------------------------
-# 2. 퀀트 시뮬레이션 코어 엔진 (수정 없음)
+# 2. 퀀트 시뮬레이션 코어 엔진 (수익률 추적 기능 추가)
 # -----------------------------------------------------------
 class FinancialSimulator:
     def __init__(self, params):
@@ -59,6 +59,7 @@ class FinancialSimulator:
 
         sim_assets_pv = np.zeros((n_simulations, simulation_years))
         sim_assets_nom = np.zeros((n_simulations, simulation_years))
+        sim_returns = np.zeros((n_simulations, simulation_years)) # ✅ 연도별 수익률 저장 매트릭스 추가
 
         inflation_matrix = np.full((n_simulations, simulation_years), inflation)
         if use_inflation_shock:
@@ -104,7 +105,7 @@ class FinancialSimulator:
             nominal_asset = current_asset
             high_water_mark = current_asset if current_asset > 0 else 1
             temp_returns = base_returns_matrix[i].copy()
-            
+
             if use_sorr_test and simulation_years > retire_idx + 1:
                 worst_indices = np.argsort(temp_returns)[:2]
                 target_indices = [retire_idx, retire_idx + 1]
@@ -122,6 +123,8 @@ class FinancialSimulator:
                 final_returns.append(current_ret)
 
             final_returns = np.array(final_returns)
+            sim_returns[i, :] = final_returns # ✅ 계산된 해당 궤적의 연도별 수익률 저장
+
             path_assets_pv = []
             path_assets_nom = []
             is_retired = False
@@ -189,7 +192,7 @@ class FinancialSimulator:
             sim_assets_pv[i, :] = path_assets_pv
             sim_assets_nom[i, :] = path_assets_nom
 
-        return years, sim_assets_pv, sim_assets_nom
+        return years, sim_assets_pv, sim_assets_nom, sim_returns # ✅ sim_returns 반환 추가
 
     def run_hybrid_analysis(self, main_sims=5000, search_sims=1000):
         is_dwz = self.params.get('dwz_mode', False)
@@ -197,7 +200,8 @@ class FinancialSimulator:
         current_age = self.params['current_age']
         retire_age = self.params['retire_age']
 
-        years, main_pv, main_nom = self.run_monte_carlo(n_simulations=main_sims, override_extra_margin=0)
+        # ✅ 반환값 언패킹 수정 (main_returns 추가)
+        years, main_pv, main_nom, main_returns = self.run_monte_carlo(n_simulations=main_sims, override_extra_margin=0)
         base_ruin = (np.sum(main_pv[:, -1] <= 0) / main_sims) * 100
 
         earliest_fire_age = retire_age
@@ -206,7 +210,8 @@ class FinancialSimulator:
                 temp_params = self.params.copy()
                 temp_params['retire_age'] = test_age
                 temp_sim = FinancialSimulator(temp_params)
-                _, test_pv, _ = temp_sim.run_monte_carlo(n_simulations=500, override_extra_margin=0)
+                # ✅ 반환값 4개로 언패킹 처리
+                _, test_pv, _, _ = temp_sim.run_monte_carlo(n_simulations=500, override_extra_margin=0)
                 test_ruin = (np.sum(test_pv[:, -1] <= 0) / 500) * 100
                 if test_ruin <= target_ruin_prob:
                     earliest_fire_age = test_age
@@ -218,7 +223,8 @@ class FinancialSimulator:
             best_extra = 0
             for _ in range(8):
                 mid = (low + high) / 2
-                _, pv, _ = self.run_monte_carlo(n_simulations=search_sims, override_extra_margin=mid)
+                # ✅ 반환값 4개로 언패킹 처리
+                _, pv, _, _ = self.run_monte_carlo(n_simulations=search_sims, override_extra_margin=mid)
                 ruin = (np.sum(pv[:, -1] <= 0) / search_sims) * 100
                 if ruin <= target_ruin_prob:
                     best_extra = mid
@@ -246,7 +252,8 @@ class FinancialSimulator:
         for inc in incs:
             if inc == 0: ruin = base_ruin
             else:
-                _, pv, _ = self.run_monte_carlo(n_simulations=search_sims, override_extra_margin=inc)
+                # ✅ 반환값 4개로 언패킹 처리
+                _, pv, _, _ = self.run_monte_carlo(n_simulations=search_sims, override_extra_margin=inc)
                 ruin = (np.sum(pv[:, -1] <= 0) / search_sims) * 100
 
             if inc == safe_extra and safe_extra > 0: label = f"+{inc}만 (안전한계선 🚩)"
@@ -254,7 +261,8 @@ class FinancialSimulator:
             else: label = f"+{inc}만 원"
             results.append({'라벨': label, '추가액': inc, '파산 확률(%)': ruin})
 
-        return years, main_pv, main_nom, safe_extra, base_ruin, pd.DataFrame(results), target_ruin_prob, earliest_fire_age
+        # ✅ main_returns 반환 추가
+        return years, main_pv, main_nom, main_returns, safe_extra, base_ruin, pd.DataFrame(results), target_ruin_prob, earliest_fire_age
 
     def run_sensitivity(self, base_ruin, sims=2000):
         scenarios = [
@@ -268,14 +276,15 @@ class FinancialSimulator:
             temp_params = self.params.copy()
             temp_params[key] += delta
             temp_sim = FinancialSimulator(temp_params)
-            _, pv, _ = temp_sim.run_monte_carlo(n_simulations=sims, override_extra_margin=0)
+            # ✅ 반환값 4개로 언패킹 처리
+            _, pv, _, _ = temp_sim.run_monte_carlo(n_simulations=sims, override_extra_margin=0)
             ruin = (np.sum(pv[:, -1] <= 0) / sims) * 100
             impact = ruin - base_ruin
             sens_results.append({"시나리오": label, "파산확률": ruin, "충격(%)": impact})
         return pd.DataFrame(sens_results)
 
 # -----------------------------------------------------------
-# 3. Streamlit UI (V45.1 툴팁 복구 버전)
+# 3. Streamlit UI (V45.1 + 1등 수익률 추적 추가)
 # -----------------------------------------------------------
 def main():
     st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V45.1)")
@@ -290,13 +299,13 @@ def main():
         div.stAlert > div { border-radius: 10px; }
         [data-baseweb="tab"] { font-size: 1.05rem; font-weight: 600; }
         .yolo-box {
-            background-color: #f0fdf4; border: 2px solid #22c55e; 
+            background-color: #f0fdf4; border: 2px solid #22c55e;
             border-radius: 12px; padding: 25px; text-align: center; margin-bottom: 20px;
         }
         .yolo-title { color: #166534; font-size: 1.4rem; font-weight: 700; margin: 0; }
         .yolo-value { color: #15803d; font-size: 2.2rem; font-weight: 800; margin: 10px 0 0 0; }
         .briefing-box {
-            background-color: #f8fafc; border-left: 5px solid #3b82f6; 
+            background-color: #f8fafc; border-left: 5px solid #3b82f6;
             padding: 20px; border-radius: 5px; margin-bottom: 25px; font-size: 1.1rem; line-height: 1.6;
         }
         </style>
@@ -337,30 +346,27 @@ def main():
 
     st.markdown("---")
 
-    # -----------------------------------------------------------
-    # [툴팁 추가 핵심 구간] 6개 고급 설정 토글 
-    # -----------------------------------------------------------
     with st.expander("🔥 **블랙 스완 & 다이 위드 제로 (고급 설정)**", expanded=True):
         with st.container(border=True):
             st.markdown("##### 🏖️ 라이프스타일 퀀트 최적화")
-            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (Go-Go, Slow-Go, No-Go 3단계 커브 적용)", value=True, key='in_dwz', 
+            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (Go-Go, Slow-Go, No-Go 3단계 커브 적용)", value=True, key='in_dwz',
                                    help="[현실화 커브] 65세까지는 욜로 예산 100% 사용, 80세까지는 30% 사용, 81세 이후 사치 0%. 대신 81세부터 매월 150만 원의 간병/의료비 폭탄이 강제 부과됩니다.")
 
         with st.container(border=True):
             st.markdown("##### 🚨 블랙 스완 방어선 (치명적 위기 테스트)")
             c_risk1, c_risk2 = st.columns(2)
-            use_fat_tail = c_risk1.checkbox("📉 팻 테일(Fat Tail) 확률 적용", value=True, key='in_fat', 
+            use_fat_tail = c_risk1.checkbox("📉 팻 테일(Fat Tail) 확률 적용", value=True, key='in_fat',
                                             help="정규분포를 무시하고 2008년 금융위기나 코로나처럼 '말도 안 되는 대폭락장'이 올 수학적 확률을 인위적으로 크게 높여 가혹하게 테스트합니다.")
-            use_sorr_test = c_risk2.checkbox("😱 은퇴 직후 2년 폭락 (SORR 셔플링)", value=True, key='in_sorr', 
+            use_sorr_test = c_risk2.checkbox("😱 은퇴 직후 2년 폭락 (SORR 셔플링)", value=True, key='in_sorr',
                                              help="[수익률 순서 리스크] 전체 투자 기간 중 가장 끔찍한 수익률이 하필 '은퇴 직후 1~2년 차'에 연달아 터지는 가장 억울한 시나리오를 강제 주입합니다.")
 
             c_risk3, c_risk4 = st.columns(2)
-            use_flex_spending = c_risk3.checkbox("🧠 점진적 생존 본능 (긴축 규칙)", value=True, key='in_flex', 
+            use_flex_spending = c_risk3.checkbox("🧠 점진적 생존 본능 (긴축 규칙)", value=True, key='in_flex',
                                                  help="[가이튼-클링거 룰] 전고점 대비 자산이 10% 깎이면 사치(YOLO) 지출을 줄이고, 30% 폭락하면 욜로 지출을 0원으로 락다운하여 계좌 파산을 방어하는 스마트 알고리즘입니다.")
-            use_glide_path = c_risk4.checkbox("📉 자산 노화 (TDF Glide Path)", value=True, key='in_glide', 
+            use_glide_path = c_risk4.checkbox("📉 자산 노화 (TDF Glide Path)", value=True, key='in_glide',
                                               help="[수익률 삭감 로직] 60세가 넘어가면 뇌의 판단력 저하 및 안전자산 선호 현상을 반영하여, 매년 기대 수익률을 0.15%p씩 강제로 깎아내립니다.")
 
-            use_inflation_shock = st.checkbox("🔥 스태그플레이션 발작 충격 (구매력 파괴)", value=True, key='in_shock', 
+            use_inflation_shock = st.checkbox("🔥 스태그플레이션 발작 충격 (구매력 파괴)", value=True, key='in_shock',
                                               help="은퇴 후 어느 시점에 무작위로 3년 연속 '물가상승률 7%'라는 초인플레이션 폭탄을 투하하여 구매력이 박살나도 계좌가 버티는지 검증합니다.")
 
     st.markdown("---")
@@ -429,7 +435,9 @@ def main():
 
         with st.spinner("복잡계 퀀트 엔진 및 V45.1 벡터화 연산 중..."):
             simulator = FinancialSimulator(params)
-            years, main_pv, main_nom, safe_extra, base_ruin, stress_df, t_ruin, earliest_fire = simulator.run_hybrid_analysis(main_sims=n_sims, search_sims=1000)
+            
+            # ✅ main_returns 추가로 받기
+            years, main_pv, main_nom, main_returns, safe_extra, base_ruin, stress_df, t_ruin, earliest_fire = simulator.run_hybrid_analysis(main_sims=n_sims, search_sims=1000)
             sens_df = simulator.run_sensitivity(base_ruin, sims=2000)
 
             total_pension = 0
@@ -439,7 +447,7 @@ def main():
             defense_rate = (total_pension / monthly_expense * 100) if monthly_expense > 0 else 0
 
             bottom_10_pv = np.percentile(main_pv, 10, axis=0)
-            
+
             depletion_age = "고갈 안 됨"
             if np.any(bottom_10_pv <= 0):
                 depletion_idx = np.argmax(bottom_10_pv <= 0)
@@ -449,10 +457,10 @@ def main():
             drawdowns = np.zeros_like(bottom_10_pv)
             valid_mask = running_max > 0
             drawdowns[valid_mask] = (running_max[valid_mask] - bottom_10_pv[valid_mask]) / running_max[valid_mask]
-            
+
             max_dd = np.max(drawdowns)
             recovery_years = "회복 불가"
-            
+
             if max_dd > 0:
                 mdd_end_idx = np.argmax(drawdowns)
                 mdd_start_idx = np.argmax(bottom_10_pv[:mdd_end_idx + 1])
@@ -468,7 +476,7 @@ def main():
                     그 결과, 65세까지는 매월 {600 + safe_extra:,}만 원을 소비하시고 그 이후엔 사치를 점진적으로 줄여가시는 조건(Go-Go, Slow-Go, No-Go)으로 파산 확률을 완벽히 방어해 냈습니다."
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 st.markdown(f"""
                 <div class='yolo-box'>
                     <p class='yolo-title'>💰 파산 확률 {t_ruin:.0f}% 방어선</p>
@@ -481,18 +489,19 @@ def main():
             with st.expander("🔍 현재 시스템에 적용된 가혹한 현실 조건 (숨은 삭감 확인)", expanded=True):
                 st.info(f"""
                 **고객님의 입력값({expected_return}%)은 다음과 같이 엔진 내부에서 강제로 깎여서 계산되고 있습니다.**
-                
+
                 * ⚖️ **자산 규모 페널티:** 자산이 10억을 초과할수록 슬리피지로 인해 수익률이 하락합니다.
                 * ⏳ **자산 노화 (TDF):** 60세 이후부터 매년 0.15%p씩 기본 수익률이 강제 하향 적용됩니다.
                 * 🏥 **생애 말기 의료비 (DWZ):** 81세 이후부터 매월 150만 원의 간병/의료비 지출이 추가 발생합니다.
-                
+
                 👉 **결론: 지금 도출된 욜로(YOLO) 예산은 먼 미래의 악조건을 모두 견뎌내고 산출된 '진짜 쓸 수 있는 돈'입니다.**
                 """)
 
+            # ✅ session_state에 returns 데이터 추가 저장
             st.session_state['sim_results'] = {
-                'years': years, 'pv': main_pv, 'nom': main_nom, 'n_sims': n_sims,
-                'safe_extra': safe_extra, 'base_ruin': base_ruin, 'stress_df': stress_df,
-                'sens_df': sens_df,
+                'years': years, 'pv': main_pv, 'nom': main_nom, 'returns': main_returns,
+                'n_sims': n_sims, 'safe_extra': safe_extra, 'base_ruin': base_ruin, 
+                'stress_df': stress_df, 'sens_df': sens_df,
                 'dwz_mode': dwz_mode, 't_ruin': t_ruin, 'defense_rate': defense_rate,
                 'depletion_age': depletion_age, 'lump_df': clean_lump_df,
                 'earliest_fire': earliest_fire, 'max_dd': max_dd * 100, 'recovery_years': recovery_years
@@ -500,7 +509,8 @@ def main():
 
     if 'sim_results' in st.session_state:
         res = st.session_state['sim_results']
-        years, sim_assets_pv, sim_assets_nom = res['years'], res['pv'], res['nom']
+        # ✅ returns 꺼내오기
+        years, sim_assets_pv, sim_assets_nom, sim_returns = res['years'], res['pv'], res['nom'], res['returns'] 
         safe_extra, base_ruin, stress_df = res['safe_extra'], res['base_ruin'], res['stress_df']
         is_dwz, target_ruin = res['dwz_mode'], res['t_ruin']
         defense_rate, depletion_age = res['defense_rate'], res['depletion_age']
@@ -523,6 +533,65 @@ def main():
 
         if defense_rate > 0:
             st.info(f"🛡️ **노후 확정 생계 방어율: {defense_rate:.1f}%** (체크된 연금 수입 합계액이 매월 필수 지출액의 {defense_rate:.1f}%를 방어합니다.)")
+
+       # -----------------------------------------------------------
+        # ✅ 신규 교체 영역: 상위 10%, 중간값(50%), 하위 10% 다중 시나리오 동시 비교
+        # -----------------------------------------------------------
+        # 1. 10,000개 시나리오 중 '최종 연도 자산'을 기준으로 백분위 타겟값 계산
+        final_assets = sim_assets_pv[:, -1]
+        
+        top10_target_val = np.percentile(final_assets, 90)
+        median_target_val = np.percentile(final_assets, 50)
+        bot10_target_val = np.percentile(final_assets, 10)
+        
+        # 2. 타겟값과 가장 일치하는 단 1개의 '실제 평행우주' 인덱스 추출
+        top10_idx = np.abs(final_assets - top10_target_val).argmin()
+        median_idx = np.abs(final_assets - median_target_val).argmin()
+        bot10_idx = np.abs(final_assets - bot10_target_val).argmin()
+        
+        # 3. 각 궤적의 연도별 데이터 매핑
+        paths = {
+            "상위 10% (운수 좋은 날)": {"ret": sim_returns[top10_idx, :], "pv": sim_assets_pv[top10_idx, :]},
+            "중간값 (가장 현실적)": {"ret": sim_returns[median_idx, :], "pv": sim_assets_pv[median_idx, :]},
+            "하위 10% (스트레스)": {"ret": sim_returns[bot10_idx, :], "pv": sim_assets_pv[bot10_idx, :]}
+        }
+
+        with st.expander(f"📊 [심층 분석] 상/중/하위 시나리오별 수익률 및 자산 궤적 3종 비교", expanded=False):
+            st.markdown(f"**총 {res['n_sims']:,}번의 평행우주 중, 자산 성과 기준 상위 10%, 50%, 90% 위치에 있는 3개의 대표 궤적입니다.**")
+
+            c_m1, c_m2, c_m3 = st.columns(3)
+            cols = [c_m1, c_m2, c_m3]
+            
+            comp_data = {"나이": years}
+            
+            for i, (label, data) in enumerate(paths.items()):
+                ret_array = data["ret"]
+                pv_array = data["pv"]
+                
+                # 기하평균(Geometric Mean)을 통한 해당 궤적의 실제 연평균 수익률(CAGR) 산출
+                cagr = (np.prod(1 + ret_array) ** (1 / len(years)) - 1) * 100
+                final_pv_eok = pv_array[-1] / 100000000
+                
+                cols[i].metric(label, f"최종 {final_pv_eok:.1f}억 원", f"연평균(CAGR): {cagr:.2f}%", delta_color="off")
+                
+                # 차트 및 테이블 출력을 위한 데이터 프레임 조립
+                short_label = label.split(" ")[0] + " " + label.split(" ")[1]
+                comp_data[f"[{short_label}] 수익률(%)"] = np.round(ret_array * 100, 2)
+                comp_data[f"[{short_label}] 자산(억)"] = np.round(pv_array / 100000000, 2)
+
+            st.markdown("---")
+            comp_df = pd.DataFrame(comp_data).set_index("나이")
+            
+            c_chart1, c_chart2 = st.columns(2)
+            with c_chart1:
+                st.markdown("###### 📈 연도별 적용 수익률 추이 비교")
+                st.line_chart(comp_df[[c for c in comp_df.columns if "수익률" in c]], height=300)
+            with c_chart2:
+                st.markdown("###### 💰 연도별 자산 잔고 추이 비교 (현재가치)")
+                st.line_chart(comp_df[[c for c in comp_df.columns if "자산" in c]], height=300)
+
+            st.markdown("###### 📋 상세 교차 검증 테이블")
+            st.dataframe(comp_df, use_container_width=True, height=250)
 
         st.markdown("<br>", unsafe_allow_html=True)
         g_col, d_col = st.columns([2.5, 1.2])
