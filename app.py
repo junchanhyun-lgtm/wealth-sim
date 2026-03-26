@@ -30,7 +30,7 @@ def calc_rolling_stats(returns_matrix, window_years):
     return win_rate, median_cagr
 
 # -----------------------------------------------------------
-# 2. 퀀트 시뮬레이션 코어 엔진 (V58)
+# 2. 퀀트 시뮬레이션 코어 엔진 (V59)
 # -----------------------------------------------------------
 class FinancialSimulator:
     def __init__(self, params):
@@ -291,10 +291,10 @@ class FinancialSimulator:
         return pd.DataFrame(sens_results)
 
 # -----------------------------------------------------------
-# 3. Streamlit UI (V58 Final)
+# 3. Streamlit UI (V59 Final)
 # -----------------------------------------------------------
 def main():
-    st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V58)")
+    st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V59)")
 
     st.markdown("""
         <style>
@@ -307,8 +307,8 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("💰 전담 퀀트 금융자산 종합 관리 시스템 (V58)")
-    st.info("💡 V58 업데이트: 은퇴 전 포트폴리오 수익률 시나리오 4종 적용, 상속 지출 반영")
+    st.title("💰 전담 퀀트 금융자산 종합 관리 시스템 (V59)")
+    st.info("💡 V59 업데이트: 은퇴 전/후 수익률 통합 시나리오 선택 로직 적용 (70:30 안전자산 블렌딩 자동화)")
     st.markdown("---")
 
     c1, c2, c3 = st.columns(3)
@@ -335,29 +335,30 @@ def main():
 
     with c3:
         with st.container(border=True):
-            st.subheader("📈 3. 자산 및 변동성 설정 (Phase 전환)")
+            st.subheader("📈 3. 자산 및 통합 수익률 시나리오")
             current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100, key='in_asset', help="대출이 포함된 총 운용 자산입니다. 기대수익률은 대출이자 및 제세금이 블렌딩된 수치로 간주합니다.")
 
-            st.markdown("###### ⚔️ 은퇴 전 (공격형 퀀트)")
+            st.markdown("###### ⚔️ 포트폴리오 통합 시나리오 선택")
             
+            # (은퇴전 수익률, 은퇴전 변동성, 은퇴후 수익률, 은퇴후 변동성)
             scenario_options = {
-                "시나리오 1: 기본 수치 (수익률 21.11% / 변동성 18.13%)": (21.11, 18.13),
-                "시나리오 2: 10% 보수적 (수익률 19.28% / 변동성 18.13%)": (19.28, 18.13),
-                "시나리오 3: 20% 보수적 (수익률 17.44% / 변동성 18.13%)": (17.44, 18.13),
-                "시나리오 4: 30% 보수적 (수익률 15.61% / 변동성 18.13%)": (15.61, 18.13)
+                "시나리오 1: 기본 (은퇴전 21.1% ➡️ 은퇴후 15.8%)": (21.11, 18.13, 15.83, 12.71),
+                "시나리오 2: 10% 보수적 (은퇴전 19.3% ➡️ 은퇴후 14.5%)": (19.28, 18.13, 14.55, 12.71),
+                "시나리오 3: 20% 보수적 (은퇴전 17.4% ➡️ 은퇴후 13.3%)": (17.44, 18.13, 13.26, 12.71),
+                "시나리오 4: 30% 보수적 (은퇴전 15.6% ➡️ 은퇴후 12.0%)": (15.61, 18.13, 11.98, 12.71)
             }
             selected_scenario = st.selectbox(
-                "포트폴리오 수익률 시나리오 선택", 
+                "성장-방어 통합 궤적 선택", 
                 list(scenario_options.keys()), 
                 index=3, 
-                help="국내퀀트(80.4%)와 듀얼모멘텀(19.6%)의 통합 기대수익률 및 변동성입니다. 가장 보수적인 4번을 권장합니다."
+                help="은퇴 전 수익률 타겟을 선택하면 은퇴 후 안전자산 30% 편입 비율이 자동 연산되어 하드코딩됩니다."
             )
-            expected_return_pre, vol_pre = scenario_options[selected_scenario]
+            
+            # 시나리오에 따른 4가지 변수 자동 할당
+            expected_return_pre, vol_pre, expected_return_post, vol_post = scenario_options[selected_scenario]
 
-            st.markdown("###### 🛡️ 은퇴 후 (방어형 7:3 스위칭)")
-            col_post1, col_post2 = st.columns(2)
-            expected_return_post = col_post1.number_input("기대수익률(%)", 0.0, 30.0, 12.0, step=0.5, key='in_ret_post', help="A전략 7:3(주식/채권) + B/C전략 유지 시 계좌 전체의 합산 기대수익률입니다.")
-            vol_post = col_post2.number_input("변동성(%)", 0.0, 50.0, 11.0, step=1.0, key='in_vol_post', help="채권 편입으로 인한 비상관성(0) 효과로 전체 계좌의 하방 변동성이 11% 수준으로 통제됩니다.")
+            st.markdown("###### 🛡️ 은퇴 후 (방어형 자동 스위칭)")
+            st.info(f"👉 해당 시나리오 적용 시, 은퇴 후 기대수익률은 **{expected_return_post}%**, 변동성은 **{vol_post}%**로 자동 하강(Glide-Path) 적용됩니다. (안전자산 30% 블렌딩)")
 
     st.markdown("---")
 
@@ -569,19 +570,19 @@ def main():
 
         with d_col:
             with st.container(border=True):
-                st.subheader("💡 퀀트 코어 엔진: V58 튜닝 로직")
+                st.subheader("💡 퀀트 코어 엔진: V59 튜닝 로직")
                 st.info(f"""
                 **1. 자산 평가 및 연금 방어율 (PV Discounting)**
                 모든 시뮬레이션 결과값은 인플레이션을 역산한 **'현재 체감 구매력'**입니다. 현재 월 필수 지출 대비 확정 연금(국민/주택)의 방어율은 **{res['defense_rate']:.1f}%**입니다.
 
-                **2. 기계적 매매 마찰 비용 (Slippage Decay)**
+                **2. 자동 글라이드 패스 & 7:3 블렌딩**
+                사용자가 선택한 통합 시나리오에 따라, 은퇴 시점에 도달하면 계좌 내 **안전자산(채권 등)의 비중이 30%로 자동 증가**하며 기대수익률과 변동성이 시스템 룰에 맞춰 동시에 하강합니다.
+
+                **3. 기계적 매매 마찰 비용 (Slippage Decay)**
                 수익률 모델링과 별개로, 자산 규모가 10억 원을 초과할 때마다 연 4회 리밸런싱에서 발생하는 호가 스프레드 비용을 수식(`0.015 * log10(자산/10억)`)에 따라 매년 자산에서 확정 삭감합니다.
 
-                **3. 상하방 평균 회귀 (Mean Reversion - 10%)**
-                자본 시장의 중력을 모사한 자기회귀(AR-1) 모델이 적용되었습니다. 전년도 시장이 폭등하거나 폭락하면, 다음 해의 기대수익률은 기계적으로 역방향(10%)으로 끌어당겨져 비현실적인 추세를 차단합니다.
-
-                **4. 스태그플레이션 영구 충격 (Zero-Sum Removed)**
-                초인플레이션 발작 시, 3년간 수익률이 하락하고 변동성이 폭증합니다. 비현실적인 V자 반등(보상) 로직을 제거하여 계좌가 입은 영구적 타격을 현실적으로 반영합니다.
+                **4. 상하방 평균 회귀 (Mean Reversion - 10%)**
+                자본 시장의 중력을 모사한 자기회귀(AR-1) 모델이 적용되었습니다. 전년도 시장이 폭등/폭락하면, 다음 해의 기대수익률은 기계적으로 역방향(10%)으로 끌어당겨집니다.
 
                 **5. 다단계 생존 본능 (Dynamic Withdrawal)**
                 계좌 잔고가 아닌 순수 시장 주가지수가 전고점 대비 5% 하락할 때마다 사치(YOLO) 지출을 20%씩 강제 삭감합니다.
