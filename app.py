@@ -30,7 +30,7 @@ def calc_rolling_stats(returns_matrix, window_years):
     return win_rate, median_cagr
 
 # -----------------------------------------------------------
-# 2. 퀀트 시뮬레이션 코어 엔진 (V55 - 금투세 및 글라이드 패스)
+# 2. 퀀트 시뮬레이션 코어 엔진 (V57)
 # -----------------------------------------------------------
 class FinancialSimulator:
     def __init__(self, params):
@@ -54,13 +54,11 @@ class FinancialSimulator:
         dwz_mode = self.params.get('dwz_mode', False)
         
         use_glide_path = self.params.get('use_glide_path', True)
-        use_progressive_tax = self.params.get('use_progressive_tax', True)
 
         years = list(range(current_age, death_age + 1))
         simulation_years = len(years)
         retire_idx = max(0, self.params['retire_age'] - current_age)
 
-        # 1. 물가상승률 및 스태그플레이션 행렬 처리
         inflation_matrix = np.full((n_simulations, simulation_years), inflation)
         shock_mask = np.zeros((n_simulations, simulation_years), dtype=bool)
         
@@ -76,7 +74,6 @@ class FinancialSimulator:
         if simulation_years > 1:
             discount_factors[:, 1:] = np.cumprod(1 + inflation_matrix[:, :-1], axis=1)
 
-        # 2. 이벤트 스케줄 정산
         recurring_df = self.params['recurring_events']
         lump_df = self.params['lump_events']
 
@@ -104,7 +101,6 @@ class FinancialSimulator:
                         if row['유형'] == '수입': pv_lump_sum[t] += amt_val
                         else: pv_lump_sum[t] -= amt_val
 
-        # 3. 시장 수익률 모델링 (글라이드 패스 탑재)
         mu_base = np.zeros(simulation_years)
         vol_base = np.zeros(simulation_years)
         
@@ -139,8 +135,6 @@ class FinancialSimulator:
             vol_multiplier = 1.5
             mu_matrix[shock_mask] -= shock_penalty
             vol_matrix[shock_mask] *= vol_multiplier
-            compensation = (3 * shock_penalty) / max(1, (simulation_years - 3))
-            mu_matrix[~shock_mask] += compensation
 
         if use_fat_tail:
             z_matrix = np.random.standard_t(df=5, size=(n_simulations, simulation_years)) / np.sqrt(5/3)
@@ -151,7 +145,7 @@ class FinancialSimulator:
         
         sim_returns = np.zeros_like(temp_returns)
         sim_returns[:, 0] = temp_returns[:, 0]
-        reversion_strength = 0.25 
+        reversion_strength = 0.10 
 
         for t in range(1, simulation_years):
             excess_prev = sim_returns[:, t-1] - mu_matrix[:, t-1]
@@ -161,7 +155,6 @@ class FinancialSimulator:
         high_water_mark_matrix = np.maximum.accumulate(market_index_matrix, axis=1)
         market_drawdown_matrix = (high_water_mark_matrix - market_index_matrix) / high_water_mark_matrix
 
-        # 4. 자산 시뮬레이션
         sim_assets_pv = np.zeros((n_simulations, simulation_years))
         sim_assets_nom = np.zeros((n_simulations, simulation_years))
         
@@ -182,7 +175,6 @@ class FinancialSimulator:
                 
             decay_factor = 1.0
             yolo_ratio = 1.0
-            med_spike = np.zeros(n_simulations)
             
             if dwz_mode:
                 if age <= 65:
@@ -192,7 +184,6 @@ class FinancialSimulator:
                     decay_factor = max(0.70, (1 - 0.015) ** (age - 60))
                 else:
                     yolo_ratio = 0.0
-                    med_spike = 1500000 * 12 * df_factor
                     decay_factor = 0.60
                     
             base_yolo_expense = override_extra_margin * 10000 * 12 * yolo_ratio
@@ -209,7 +200,7 @@ class FinancialSimulator:
             actual_yolo_expense = base_yolo_expense * yolo_mult
             base_expense_applied = base_monthly_expense * decay_factor
             
-            target_lifestyle_annual_pv = base_expense_applied + actual_yolo_expense + med_spike
+            target_lifestyle_annual_pv = base_expense_applied + actual_yolo_expense
             
             total_income_annual = current_nom_inc + extra_inc
             nominal_actual_spending = (target_lifestyle_annual_pv * df_factor) + extra_exp
@@ -222,19 +213,10 @@ class FinancialSimulator:
             
             adj_return = sim_returns[:, t] - penalty
             
-            # 수익 계산 및 금투세/누진세 적용 로직
             gain_on_base = current_assets * adj_return
-            progressive_tax = np.zeros(n_simulations)
-            
-            if use_progressive_tax:
-                # 퀀트 전략 특성상 매년 수익실현 발생 가정 (기본 공제 5천만 원)
-                tax_free_threshold = 50000000.0
-                taxable_gain = np.maximum(0.0, gain_on_base - tax_free_threshold)
-                progressive_tax = taxable_gain * 0.22  # 22% 과세율 적용
-            
             gain_on_cashflow = net_cashflow * (adj_return / 2.0)
             
-            current_assets = current_assets + gain_on_base - progressive_tax + net_cashflow + gain_on_cashflow + nom_lump
+            current_assets = current_assets + gain_on_base + net_cashflow + gain_on_cashflow + nom_lump
             current_assets = np.maximum(current_assets, 0.0) 
             
             sim_assets_nom[:, t] = current_assets
@@ -309,10 +291,10 @@ class FinancialSimulator:
         return pd.DataFrame(sens_results)
 
 # -----------------------------------------------------------
-# 3. Streamlit UI (V55 Final)
+# 3. Streamlit UI (V57 Final)
 # -----------------------------------------------------------
 def main():
-    st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V55)")
+    st.set_page_config(layout="wide", page_title="My Quant Asset Sim (V57)")
 
     st.markdown("""
         <style>
@@ -325,8 +307,8 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("💰 전담 퀀트 금융자산 종합 관리 시스템 (V55)")
-    st.info("💡 V55 업데이트: 45세 엑시트 기본값 적용, 금투세(누진세) 페널티 및 은퇴 연착륙(글라이드 패스) 탑재")
+    st.title("💰 전담 퀀트 금융자산 종합 관리 시스템 (V57)")
+    st.info("💡 V57 업데이트: 파산타겟(15/20%) 유지, 툴팁 복구, 주택구입 50세 연기, 상속 이벤트 4회분 반영")
     st.markdown("---")
 
     c1, c2, c3 = st.columns(3)
@@ -335,8 +317,8 @@ def main():
         with st.container(border=True):
             st.subheader("👤 1. 기본 정보 & 은퇴 설정")
             current_age = st.number_input("현재 나이", 20, 80, 40, key='in_age', help="현재 나이를 입력하십시오.")
-            retire_age = st.number_input("은퇴 나이 (소득 중단 시점)", current_age, 90, 60, key='in_ret_age', help="이 나이부터 한의원 근로 소득이 완전히 끊깁니다.") # 기본값 45세로 변경
-            death_age = st.number_input("목표 수명", 80, 120, 90, key='in_death', help="이 나이까지 자산이 고갈되지 않아야 시뮬레이션 성공(파산 확률 0%)으로 판정합니다.")
+            retire_age = st.number_input("은퇴 나이 (소득 중단 시점)", current_age, 90, 60, key='in_ret_age', help="본 시스템의 1차 목표 지점입니다. 60세 시점의 자산 방어율을 중점적으로 추적합니다.") 
+            death_age = st.number_input("목표 수명", 80, 120, 90, key='in_death', help="이 나이까지 자산이 고갈되지 않아야 파산 확률 0%로 판정합니다.")
 
     with c2:
         with st.container(border=True):
@@ -344,7 +326,7 @@ def main():
             col_inc1, col_inc2 = st.columns(2)
             monthly_income = col_inc1.number_input("월 수입 (세후/만원)", 0, value=500, step=10, key='in_income', help="한의원 순수익입니다.")
             apply_income_inflation = col_inc2.checkbox("수입 물가연동", value=False, key='in_inc_inf', help="체크 시, 은퇴 전까지 소득도 물가상승률만큼 동반 상승한다고 가정합니다.")
-            monthly_expense = st.number_input("월 필수 기본 지출 (만원)", 0, value=600, step=10, key='in_expense', help="가족 생계유지를 위한 필수 생활비입니다. 이 금액을 1순위로 방어합니다.")
+            monthly_expense = st.number_input("월 필수 지출 (대출 이자 포함/만원)", 0, value=600, step=10, key='in_expense', help="가족 생활비 및 대출 이자가 모두 포함된 총 지출액입니다.")
             
             st.markdown("---")
             col_ret3, col_ret4 = st.columns(2)
@@ -354,11 +336,11 @@ def main():
     with c3:
         with st.container(border=True):
             st.subheader("📈 3. 자산 및 변동성 설정 (Phase 전환)")
-            current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100, key='in_asset', help="대출이 포함된 총 운용 자산입니다.")
+            current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100, key='in_asset', help="대출이 포함된 총 운용 자산입니다. 기대수익률은 대출이자 및 제세금이 블렌딩된 수치로 간주합니다.")
             
             st.markdown("###### ⚔️ 은퇴 전 (공격형 퀀트)")
             col_pre1, col_pre2 = st.columns(2)
-            expected_return_pre = col_pre1.number_input("기대수익률(%)", 0.0, 30.0, 16.0, step=0.5, key='in_ret_pre', help="근로 소득이 있을 때의 공격적 퀀트 수익률 타겟입니다. (배당 포함 현실화 16%)")
+            expected_return_pre = col_pre1.number_input("기대수익률(%)", 0.0, 30.0, 16.0, step=0.5, key='in_ret_pre', help="근로 소득이 있을 때의 공격적 퀀트 수익률 타겟입니다. (사전 세금/마찰비용 블렌딩 반영)")
             vol_pre = col_pre2.number_input("변동성(%)", 0.0, 50.0, 17.5, step=1.0, key='in_vol_pre', help="퀀트 시스템 트레이더의 야수성을 반영한 변동성입니다.")
             
             st.markdown("###### 🛡️ 은퇴 후 (방어형 7:3 스위칭)")
@@ -372,25 +354,28 @@ def main():
         c_adv1, c_adv2 = st.columns(2)
         with c_adv1.container(border=True):
             st.markdown("##### 🏖️ 라이프스타일 최적화")
-            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (파산 확률 20% 타겟)", value=True, key='in_dwz')
-            use_flex_spending = st.checkbox("🧠 다단계 생존 본능 (시장 5% 하락 시 긴축)", value=True, key='in_flex')
+            dwz_mode = st.checkbox("🔥 Die with Zero 최적화 (파산 확률 20% 타겟)", value=True, key='in_dwz', help="체크 시 기본 15%에서 20%로 타겟 확률을 상향 조정하며 효용을 극대화합니다.")
+            use_flex_spending = st.checkbox("🧠 다단계 생존 본능 (시장 5% 하락 시 긴축)", value=True, key='in_flex', help="시장이 하락할 때 지출을 통제하는 동적 인출 로직을 작동시킵니다.")
             use_glide_path = st.checkbox("🛬 동적 글라이드 패스 (은퇴 5년 전부터 연착륙)", value=True, key='in_glide', help="은퇴 시점에 임박하여 수익률과 변동성을 5년에 걸쳐 계단식으로 부드럽게 낮춥니다.")
 
         with c_adv2.container(border=True):
-            st.markdown("##### 🚨 극한 스트레스 & 조세 페널티")
-            use_fat_tail = st.checkbox("📉 팻 테일(Fat Tail) 대폭락장 적용", value=True, key='in_fat')
-            use_inflation_shock = st.checkbox("🔥 스태그플레이션 (수익률 제로섬 충격)", value=True, key='in_shock')
-            use_progressive_tax = st.checkbox("💸 금투세/누진세 (연수익 5천만 초과 시 22% 과세)", value=True, key='in_tax2', help="퀀트 회전율을 감안하여 매년 5천만 원 초과 자본 차익에 대해 22%의 세금을 기계적으로 떼어냅니다.")
+            st.markdown("##### 🚨 극한 스트레스 테스팅")
+            use_fat_tail = st.checkbox("📉 팻 테일(Fat Tail) 대폭락장 적용", value=True, key='in_fat', help="정규 분포를 벗어나는 극단적인 금융위기급 폭락 확률을 시뮬레이션에 포함합니다.")
+            use_inflation_shock = st.checkbox("🔥 스태그플레이션 (수익률 영구 타격)", value=True, key='in_shock', help="3년간 고물가 및 수익률 하락이 동시에 오는 블랙스완 시나리오를 적용합니다.")
 
     st.markdown("---")
     st.subheader("📱 4. 이벤트성 추가 수입/지출")
-    tab1, tab2 = st.tabs(["💸 일회성 목돈", "📅 기간성 수입/지출 (연금 포함)"])
+    tab1, tab2 = st.tabs(["💸 일회성 목돈 (상속/구입 등)", "📅 기간성 수입/지출 (연금/초과근무 등)"])
     
     with tab1:
         if 'lump_df' not in st.session_state:
             st.session_state.lump_df = pd.DataFrame([
                 {"나이": 41, "유형": "지출", "내용": "대출상환", "금액(만원)": 10000},
-                {"나이": 45, "유형": "지출", "내용": "주택구입", "금액(만원)": 32000} # 45세로 변경
+                {"나이": 41, "유형": "수입", "내용": "상속", "금액(만원)": 2000},
+                {"나이": 50, "유형": "지출", "내용": "주택구입", "금액(만원)": 32000},
+                {"나이": 51, "유형": "수입", "내용": "상속", "금액(만원)": 2000},
+                {"나이": 61, "유형": "수입", "내용": "상속", "금액(만원)": 5000},
+                {"나이": 71, "유형": "수입", "내용": "상속", "금액(만원)": 5000}
             ])
         edited_lump_df = st.data_editor(st.session_state.lump_df, num_rows="dynamic", use_container_width=True,
                                         column_config={"유형": st.column_config.SelectboxColumn("유형", options=["수입", "지출"])})
@@ -400,11 +385,11 @@ def main():
         if 'recur_df' not in st.session_state:
             st.session_state.recur_df = pd.DataFrame([
                 {"시작나이": 40, "기간(년)": 20, "유형": "지출", "내용": "부모님용돈", "월금액(만원)": 100, "확정연금": False, "물가연동": False},
-                {"시작나이": 40, "기간(년)": 5, "유형": "수입", "내용": "주6일 초과근무", "월금액(만원)": 200, "확정연금": False, "물가연동": False}, # 5년, 연동 False
-                {"시작나이": 47, "기간(년)": 5, "유형": "지출", "내용": "자동차 할부금", "월금액(만원)": 250, "확정연금": False, "물가연동": False}, # 추가
+                {"시작나이": 40, "기간(년)": 10, "유형": "수입", "내용": "주6일 초과근무", "월금액(만원)": 200, "확정연금": False, "물가연동": False}, 
+                {"시작나이": 47, "기간(년)": 5, "유형": "지출", "내용": "자동차 할부금", "월금액(만원)": 250, "확정연금": False, "물가연동": False}, 
                 {"시작나이": 60, "기간(년)": 30, "유형": "지출", "내용": "지역 건보료 폭탄", "월금액(만원)": 50, "확정연금": False, "물가연동": True},
                 {"시작나이": 70, "기간(년)": 20, "유형": "수입", "내용": "국민연금", "월금액(만원)": 100, "확정연금": True, "물가연동": True},
-                {"시작나이": 70, "기간(년)": 20, "유형": "수입", "내용": "주택연금", "월금액(만원)": 100, "확정연금": True, "물가연동": True} # 물가연동 True로 변경
+                {"시작나이": 70, "기간(년)": 20, "유형": "수입", "내용": "주택연금", "월금액(만원)": 100, "확정연금": True, "물가연동": True} 
             ])
         edited_recur_df = st.data_editor(st.session_state.recur_df, num_rows="dynamic", use_container_width=True,
                                          column_config={"유형": st.column_config.SelectboxColumn("유형", options=["수입", "지출"]),
@@ -426,8 +411,7 @@ def main():
             'use_fat_tail': use_fat_tail, 
             'use_inflation_shock': use_inflation_shock, 'use_flex_spending': use_flex_spending,
             'dwz_mode': dwz_mode,
-            'use_glide_path': use_glide_path,
-            'use_progressive_tax': use_progressive_tax
+            'use_glide_path': use_glide_path
         }
 
         with st.spinner("복합 조세 모듈 및 글라이드 패스 연산 수행 중..."):
@@ -457,7 +441,8 @@ def main():
                 'years': years, 'pv': main_pv, 'nom': main_nom, 'returns': main_returns,
                 'n_sims': n_sims, 'safe_extra': safe_extra, 'base_ruin': base_ruin,
                 'stress_df': stress_df, 'sens_df': sens_df,
-                'dwz_mode': dwz_mode, 't_ruin': t_ruin, 'defense_rate': defense_rate, 'lump_df': clean_lump_df
+                'dwz_mode': dwz_mode, 't_ruin': t_ruin, 'defense_rate': defense_rate, 'lump_df': clean_lump_df,
+                'retire_age': retire_age
             }
 
     if 'sim_results' in st.session_state:
@@ -466,6 +451,7 @@ def main():
         base_ruin, stress_df, sens_df = res['base_ruin'], res['stress_df'], res['sens_df']
         is_dwz, target_ruin = res['dwz_mode'], res['t_ruin']
         res_lump_df = res['lump_df']
+        tgt_retire = res['retire_age']
 
         final_assets = sim_assets_pv[:, -1]
         top10_idx = np.abs(final_assets - np.percentile(final_assets, 90)).argmin()
@@ -473,33 +459,33 @@ def main():
         bot10_idx = np.abs(final_assets - np.percentile(final_assets, 10)).argmin()
 
         with st.expander(f"⏳ [멘탈 방어] 구간별 승률(Rolling Window)", expanded=False):
-            st.markdown("###### 📊 우주를 분석한 '보유 기간별' 시스템 승률 (평균회귀 작용)")
+            st.markdown("###### 📊 우주를 분석한 '보유 기간별' 시스템 승률 (평균회귀 10% 작용)")
             c_r1, c_r2, c_r3, c_r4 = st.columns(4)
             r_windows = [1, 3, 5, 10]
             r_cols = [c_r1, c_r2, c_r3, c_r4]
             for r_w, r_c in zip(r_windows, r_cols):
                 w_rate, m_cagr = calc_rolling_stats(sim_returns, r_w)
                 r_c.metric(f"{r_w}년 유지 시 승률", f"{w_rate:.1f}%", f"해당 구간 연평균: {m_cagr:.2f}%", delta_color="off")
-            st.caption("※ 평균 회귀(Mean Reversion) 로직이 탑재되어, 기간이 길어질수록 수익률이 기댓값에 더욱 강력하게 수렴합니다.")
+            st.caption("※ 평균 회귀(Mean Reversion) 로직이 탑재되어, 기간이 길어질수록 수익률이 기댓값에 수렴합니다. (강도: 10%)")
 
         paths = {
             "상위 10% (운수 좋은 날)": {"ret": sim_returns[top10_idx, :], "pv": sim_assets_pv[top10_idx, :]},
             "중간값 (가장 현실적)": {"ret": sim_returns[median_idx, :], "pv": sim_assets_pv[median_idx, :]},
             "하위 10% (스트레스)": {"ret": sim_returns[bot10_idx, :], "pv": sim_assets_pv[bot10_idx, :]}
         }
-        with st.expander(f"📊 [심층 분석] 상/중/하위 시나리오별 수익률 및 자산 궤적 3종 비교", expanded=False):
+        with st.expander(f"📊 [심층 분석] {tgt_retire}세(은퇴) 도달 시점 시나리오별 자산 궤적 3종 비교", expanded=False):
             st.markdown(f"**총 {res['n_sims']:,}번의 평행우주 중, 자산 성과 기준 대표 궤적입니다.**")
             c_m1, c_m2, c_m3 = st.columns(3)
             cols = [c_m1, c_m2, c_m3]
             comp_data = {"나이": years}
-            target_age_idx = years.index(60) if 60 in years else -1
+            target_age_idx = years.index(tgt_retire) if tgt_retire in years else -1
 
             for i, (label, data) in enumerate(paths.items()):
                 ret_array = data["ret"]
                 pv_array = data["pv"]
                 cagr = (np.prod(1 + ret_array) ** (1 / len(years)) - 1) * 100
-                age60_pv_eok = pv_array[target_age_idx] / 100000000 if target_age_idx != -1 else 0
-                cols[i].metric(label, f"60세 자산 {age60_pv_eok:.1f}억 원", f"연평균(CAGR): {cagr:.2f}%", delta_color="off")
+                tgt_pv_eok = pv_array[target_age_idx] / 100000000 if target_age_idx != -1 else 0
+                cols[i].metric(label, f"{tgt_retire}세 자산 {tgt_pv_eok:.1f}억 원", f"연평균(CAGR): {cagr:.2f}%", delta_color="off")
 
                 short_label = label.split(" ")[0] + " " + label.split(" ")[1]
                 comp_data[f"[{short_label}] 수익률(%)"] = np.round(ret_array * 100, 2)
@@ -514,8 +500,6 @@ def main():
             with c_chart2:
                 st.markdown("###### 💰 연도별 자산 잔고 추이 비교 (현재가치)")
                 st.line_chart(comp_df[[c for c in comp_df.columns if "자산" in c]], height=300)
-            st.markdown("###### 📋 상세 교차 검증 테이블")
-            st.dataframe(comp_df, use_container_width=True, height=250)
 
         st.markdown("<br>", unsafe_allow_html=True)
         g_col, d_col = st.columns([2.5, 1.2])
@@ -529,17 +513,17 @@ def main():
             with st.container(border=True):
                 st.plotly_chart(fig_stress, use_container_width=True)
 
-            st.markdown("##### 📈 메인 자산 궤적 (현재 지출 유지 시)")
+            st.markdown(f"##### 📈 메인 자산 궤적 ({tgt_retire}세 1차 방어선 집중)")
             median_pv = np.median(sim_assets_pv, axis=0) / 100000000
             top_10_pv = np.percentile(sim_assets_pv, 90, axis=0) / 100000000
             bottom_10_pv = np.percentile(sim_assets_pv, 10, axis=0) / 100000000
 
-            idx_target = years.index(60) if 60 in years else -1
+            idx_target = years.index(tgt_retire) if tgt_retire in years else -1
 
             k1, k2, k3 = st.columns(3)
-            k1.metric("기본 파산 확률", f"{base_ruin:.1f}%")
-            k2.metric(f"60세 예상 자산 (중앙값)", f"{median_pv[idx_target]:.2f}억 원")
-            k3.metric("최악의 경우 (하위 10%)", f"{bottom_10_pv[idx_target]:.2f}억 원")
+            k1.metric("90세 최종 파산 확률", f"{base_ruin:.1f}%")
+            k2.metric(f"{tgt_retire}세 예상 자산 (중앙값)", f"{median_pv[idx_target]:.2f}억 원")
+            k3.metric(f"최악의 경우 (하위 10%)", f"{bottom_10_pv[idx_target]:.2f}억 원")
 
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=years+years[::-1], y=np.concatenate([top_10_pv, bottom_10_pv[::-1]]), fill='toself', fillcolor='rgba(46, 134, 193, 0.15)', line=dict(color='rgba(255,255,255,0)'), name='신뢰구간(10~90%)', hoverinfo='skip'))
@@ -547,8 +531,8 @@ def main():
             fig.add_trace(go.Scatter(x=years, y=bottom_10_pv, line=dict(color='#E74C3C', width=2, dash='dot'), name='하위 10%', hovertemplate='%{y:.2f}억 원<extra></extra>'))
             fig.add_hline(y=0, line_dash="solid", line_color="#333333", line_width=1)
 
-            if retire_age in years:
-                fig.add_vline(x=retire_age, line_dash="dash", line_color="#95a5a6", annotation_text="은퇴 & 수비형 전환")
+            if tgt_retire in years:
+                fig.add_vline(x=tgt_retire, line_dash="dash", line_color="#95a5a6", annotation_text="은퇴 & 수비형 전환")
             if is_dwz and 81 in years:
                 fig.add_vline(x=81, line_dash="dot", line_color="#9b59b6", annotation_text="사치 종료")
 
@@ -574,7 +558,7 @@ def main():
 
         with d_col:
             with st.container(border=True):
-                st.subheader("💡 퀀트 코어 엔진: V54 고도화 로직")
+                st.subheader("💡 퀀트 코어 엔진: V57 튜닝 로직")
                 st.info(f"""
                 **1. 자산 평가 및 연금 방어율 (PV Discounting)**
                 모든 시뮬레이션 결과값은 인플레이션을 역산한 **'현재 체감 구매력'**입니다. 현재 월 필수 지출 대비 확정 연금(국민/주택)의 방어율은 **{res['defense_rate']:.1f}%**입니다.
@@ -582,14 +566,14 @@ def main():
                 **2. 기계적 매매 마찰 비용 (Slippage Decay)**
                 수익률 모델링과 별개로, 자산 규모가 10억 원을 초과할 때마다 연 4회 리밸런싱에서 발생하는 호가 스프레드 비용을 수식(`0.015 * log10(자산/10억)`)에 따라 매년 자산에서 확정 삭감합니다.
 
-                **3. 상하방 평균 회귀 (Mean Reversion)**
-                자본 시장의 중력을 모사한 자기회귀(AR-1) 모델이 적용되었습니다. 전년도 시장이 비정상적으로 폭등(+30%)하거나 폭락(-20%)하면, 다음 해의 기대수익률은 기계적으로 역방향(25%)으로 끌어당겨져 비현실적인 추세를 차단합니다.
+                **3. 상하방 평균 회귀 (Mean Reversion - 10%)**
+                자본 시장의 중력을 모사한 자기회귀(AR-1) 모델이 적용되었습니다. 전년도 시장이 폭등하거나 폭락하면, 다음 해의 기대수익률은 기계적으로 역방향(10%)으로 끌어당겨져 비현실적인 추세를 차단합니다. 
 
-                **4. 스태그플레이션 제로섬 충격 (Zero-Sum Shock)**
-                초인플레이션 발작 시, 주식과 채권이 동반 하락하는 매크로 환경을 반영하여 3년간 수익률이 -5%p 하락하고 변동성이 폭증합니다. 단, 백테스트의 전체 기댓값을 훼손하지 않기 위해 깎인 15%의 수익은 나머지 47년에 공평하게 분배됩니다.
+                **4. 스태그플레이션 영구 충격 (Zero-Sum Removed)**
+                초인플레이션 발작 시, 3년간 수익률이 하락하고 변동성이 폭증합니다. 비현실적인 V자 반등(보상) 로직을 제거하여 계좌가 입은 영구적 타격을 현실적으로 반영합니다.
 
                 **5. 다단계 생존 본능 (Dynamic Withdrawal)**
-                계좌 잔고가 아닌 순수 시장 주가지수가 전고점 대비 5% 하락할 때마다 사치(YOLO) 지출을 20%씩 강제 삭감합니다. 하락장 바닥에서 주식을 팔아 소비하는 '변동성 끌림'을 원천 차단합니다.
+                계좌 잔고가 아닌 순수 시장 주가지수가 전고점 대비 5% 하락할 때마다 사치(YOLO) 지출을 20%씩 강제 삭감합니다. 
                 """)
 
 if __name__ == '__main__':
