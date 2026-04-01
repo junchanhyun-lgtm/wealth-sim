@@ -177,14 +177,21 @@ class FinancialSimulator:
             yolo_ratio = 1.0
 
             if dwz_mode:
+                # 1. 기본 생활비 점진적 감소 (60세 이후부터 적용, 최대 70% 선까지 하강)
+                if age > 60:
+                    decay_factor = max(0.70, (1 - 0.015) ** (age - 60))
+                
+                # 2. YOLO(사치) 예산 연착륙 스무딩 로직
                 if age <= 65:
                     yolo_ratio = 1.0
+                elif age <= 75:
+                    # 66세~75세 구간: 1.0에서 0.3으로 10년간 부드럽게 선형 감소
+                    yolo_ratio = 1.0 - ((age - 65) * 0.07)
                 elif age <= 80:
                     yolo_ratio = 0.3
-                    decay_factor = max(0.70, (1 - 0.015) ** (age - 60))
                 else:
                     yolo_ratio = 0.0
-                    decay_factor = 0.60
+                    decay_factor = 0.60 # 81세 이후 생활비 60%로 추가 삭감 강제
 
             base_yolo_expense = override_extra_margin * 10000 * 12 * yolo_ratio
 
@@ -339,7 +346,7 @@ def main():
             current_asset = st.number_input("현재 금융자산 (만원)", 0, value=97000, step=100, key='in_asset', help="대출이 포함된 총 운용 자산입니다. 기대수익률은 대출이자 및 제세금이 블렌딩된 수치로 간주합니다.")
 
             st.markdown("###### ⚔️ 포트폴리오 통합 시나리오 선택")
-            
+
             # (은퇴전 수익률, 은퇴전 변동성, 은퇴후 수익률, 은퇴후 변동성)
             scenario_options = {
                 "시나리오 1: 기본 (은퇴전 21.1% ➡️ 은퇴후 15.8%)": (21.11, 18.13, 15.83, 12.71),
@@ -348,12 +355,12 @@ def main():
                 "시나리오 4: 30% 보수적 (은퇴전 15.6% ➡️ 은퇴후 12.0%)": (15.61, 18.13, 11.98, 12.71)
             }
             selected_scenario = st.selectbox(
-                "성장-방어 통합 궤적 선택", 
-                list(scenario_options.keys()), 
-                index=3, 
+                "성장-방어 통합 궤적 선택",
+                list(scenario_options.keys()),
+                index=3,
                 help="은퇴 전 수익률 타겟을 선택하면 은퇴 후 안전자산 30% 편입 비율이 자동 연산되어 하드코딩됩니다."
             )
-            
+
             # 시나리오에 따른 4가지 변수 자동 할당
             expected_return_pre, vol_pre, expected_return_post, vol_post = scenario_options[selected_scenario]
 
@@ -383,11 +390,11 @@ def main():
         if 'lump_df' not in st.session_state:
             st.session_state.lump_df = pd.DataFrame([
                 {"나이": 41, "유형": "지출", "내용": "대출상환", "금액(만원)": 10000},
-                {"나이": 41, "유형": "지출", "내용": "상속", "금액(만원)": 2000},
+                {"나이": 41, "유형": "지출", "내용": "증여", "금액(만원)": 2000},
                 {"나이": 50, "유형": "지출", "내용": "주택구입", "금액(만원)": 32000},
-                {"나이": 51, "유형": "지출", "내용": "상속", "금액(만원)": 2000},
-                {"나이": 61, "유형": "지출", "내용": "상속", "금액(만원)": 5000},
-                {"나이": 71, "유형": "지출", "내용": "상속", "금액(만원)": 5000}
+                {"나이": 51, "유형": "지출", "내용": "증여", "금액(만원)": 2000},
+                {"나이": 61, "유형": "지출", "내용": "증여", "금액(만원)": 5000},
+                {"나이": 71, "유형": "지출", "내용": "증여", "금액(만원)": 5000}
             ])
         edited_lump_df = st.data_editor(st.session_state.lump_df, num_rows="dynamic", use_container_width=True,
                                         column_config={"유형": st.column_config.SelectboxColumn("유형", options=["수입", "지출"])})
